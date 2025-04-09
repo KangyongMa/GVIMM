@@ -637,7 +637,7 @@ def load_documents(file_path):
     return loader.load()
 
 # Load experiment data
-experiment_data = load_documents("E://HuaweiMoveData//Users//makangyong//Desktop//output.txt")
+experiment_data = load_documents("GVIM-main31/output.txt")
 
 # Load literature (if available)
 literature_path = ""  # Update this path if you have literature to load
@@ -1346,7 +1346,7 @@ class ChemistryLab:
         logger.info(f"Loading documents. Literature path: {self.literature_path}")
 
         # Load experiment data
-        experiment_data = load_documents("E://HuaweiMoveData//Users//makangyong//Desktop//output.txt")
+        experiment_data = load_documents("GVIM-main31/output.txt")
         logger.info(f"Loaded {len(experiment_data)} experiment documents")
 
         # Load literature (if available)
