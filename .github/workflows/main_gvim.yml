@@ -23,7 +23,7 @@ jobs:
       - name: Install Cairo dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcairo2 libcairo2-dev
+          sudo apt-get install -y libcairo2 libcairo2-dev pkg-config
 
       - name: Create and start virtual environment
         run: |
@@ -69,3 +69,4 @@ jobs:
           app-name: 'GVIM'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_46B8FC95F5434C86B34A0643D76E815E }}
+
