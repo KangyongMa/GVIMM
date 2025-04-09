@@ -70,14 +70,15 @@ jobs:
 
       # Add a longer delay before deployment to avoid SCM container restart conflict
       - name: Wait before deployment
-        run: sleep 60  # Wait for 1 minute before deploying
+        run: sleep 120  # Wait for 2 minutes before deploying
 
+      # Retry logic for deployment with 3 attempts
       - name: Retry Deployment (3 attempts)
         run: |
           for i in {1..3}
           do
             echo "Attempt $i of 3"
-            az webapp deploy --name 'GVIM' --resource-group 'YourResourceGroup' --src-path release.zip --slot 'Production' && break
+            az webapp deploy --resource-group 'YourResourceGroup' --name 'GVIM' --src-path release.zip --slot 'Production' && break
             echo "Deployment failed, retrying in 30 seconds..."
             sleep 30
           done
