@@ -79,13 +79,9 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D77AE93AC6AB4EA8BE2958BB928FBBE7 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_0E1A1BB45981408A84D90BFADA01423B }}
       
-      - name: 'Deploy to Azure Web App'
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
-        with:
-          app-name: 'GVIM'
-          slot-name: 'Production'
-        id: deploy-to-webapp
         with:
           app-name: 'GVIM'
           slot-name: 'Production'
