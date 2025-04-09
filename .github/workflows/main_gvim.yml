@@ -16,26 +16,36 @@ jobs:
       contents: read #This is required for actions/checkout
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-      - name: Create and start virtual environment
+      
+      - name: Create virtual environment
+        run: python -m venv venv
+      
+      - name: Update apt repositories
+        run: sudo apt-get update -y
+        continue-on-error: true
+      
+      - name: Install Cairo dependencies
         run: |
-          python -m venv venv
+          sudo apt-get install -y --no-install-recommends libcairo2-dev pkg-config python3-dev
+        continue-on-error: false
+      
+      - name: Activate virtual environment and install dependencies
+        run: |
           source venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install wheel setuptools
+          pip install -r requirements.txt || pip install --verbose -r requirements.txt
       
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config python3-dev
-      
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-        
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+      
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
+      
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
@@ -58,6 +68,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+      
       - name: Unzip artifact for deployment
         run: unzip release.zip
       
@@ -67,8 +78,13 @@ jobs:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_B1DCB32B31624D3C904948C6BB852361 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D77AE93AC6AB4EA8BE2958BB928FBBE7 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_0E1A1BB45981408A84D90BFADA01423B }}
+      
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: 'GVIM'
+          slot-name: 'Production'
         id: deploy-to-webapp
         with:
           app-name: 'GVIM'
