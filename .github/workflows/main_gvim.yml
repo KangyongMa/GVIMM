@@ -68,6 +68,10 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
+      # Add a small delay before deployment to avoid SCM container restart conflict
+      - name: Wait before deployment
+        run: sleep 30
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
