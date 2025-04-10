@@ -1,3 +1,7 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
+
 name: Build and deploy Python app to Azure Web App - GVIM
 
 on:
@@ -10,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read # This is required for actions/checkout
+      contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
@@ -20,22 +24,11 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install Cairo dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2 libcairo2-dev pkg-config
-          sudo apt-get install -y libpkgconf-dev
-
-      - name: Set PKG_CONFIG_PATH for Cairo
-        run: |
-          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-
       - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
-
+      
       - name: Install dependencies
         run: pip install -r requirements.txt
         
@@ -58,7 +51,10 @@ jobs:
     environment:
       name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
-    
+    permissions:
+      id-token: write #This is required for requesting the JWT
+      contents: read #This is required for actions/checkout
+
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
@@ -68,17 +64,18 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      # Add a longer delay before deployment to avoid SCM container restart conflict
-      - name: Wait before deployment
-        run: sleep 120  # Wait for 2 minutes before deploying
+      
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_847C417A9D5B4AA0ACCBFFDF843C1D5B }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_966BA2457C8C4CCE830C257D6EA9A357 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F2D56D74B75346029E1A862E37D1C347 }}
 
-      # Retry logic for deployment with 3 attempts
-      - name: Retry Deployment (3 attempts)
-        run: |
-          for i in {1..3}
-          do
-            echo "Attempt $i of 3"
-            az webapp deploy --resource-group 'YourResourceGroup' --name 'GVIM' --src-path release.zip --slot 'Production' && break
-            echo "Deployment failed, retrying in 30 seconds..."
-            sleep 30
-          done
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: 'GVIM'
+          slot-name: 'Production'
+          
