@@ -150,51 +150,61 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Store the resource group name as a GitHub Actions environment variable
-      - name: Set Resource Group Name
-        id: resourcegroup
+      # Checking if webapp exists to determine resource group name
+      - name: Find resource group
+        id: findresourcegroup
         run: |
-          # Hardcode the resource group name directly to avoid lookup issues
-          # Replace "gvim-resource-group" with your actual resource group name
-          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
-          echo "Using resource group: gvim-resource-group"
-      
-      # Get the publishing profile using explicit resource group
-      - name: Get publishing profile
-        id: publishprofile
-        run: |
-          PROFILE=$(az webapp deployment list-publishing-profiles --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" --xml)
-          echo "::add-mask::$PROFILE"
-          echo "AZURE_WEBAPP_PUBLISH_PROFILE=$PROFILE" >> $GITHUB_ENV
-          echo "Publishing profile retrieved successfully"
+          echo "Looking for resource group containing 'gvim' webapp..."
+          RESOURCE_GROUP=$(az webapp list --query "[?name=='gvim'].resourceGroup" -o tsv)
+          
+          if [ -n "$RESOURCE_GROUP" ]; then
+            echo "Found resource group: $RESOURCE_GROUP"
+            echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+          else
+            echo "Could not find resource group for 'gvim' webapp. Using fallback."
+            # Try alternative webapp name case or use default
+            RESOURCE_GROUP=$(az webapp list --query "[?name=='GVIM'].resourceGroup" -o tsv || echo "gvim-resourcegroup")
+            echo "Using fallback resource group: $RESOURCE_GROUP"
+            echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+          fi
 
-      # Modified deployment step with publishing profile and improved settings
-      - name: Prep for deployment
+      # Create output directory to prepare for improved deployment
+      - name: Prepare for deployment
         run: |
           echo "Preparing for deployment..."
-          echo "Waiting for 30 seconds to ensure no conflicting operations..."
-          sleep 30
+          echo "Resource group: ${{ env.RESOURCE_GROUP }}"
+          echo "Checking webapp details..."
+          az webapp show --name gvim --resource-group "${{ env.RESOURCE_GROUP }}" || echo "Could not retrieve webapp details"
+          
+          # Wait before deployment to avoid conflicts
+          echo "Waiting 15 seconds before deployment..."
+          sleep 15
 
+      # Deploy using zip deploy method with an explicit resource group
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'gvim'
           slot-name: 'Production'
-          publish-profile: ${{ env.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          resource-group: ${{ env.RESOURCE_GROUP }}
           package: .
           clean: true
-          startup-command: 'gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app'
+          # Don't use startup-command here, we'll configure it separately
+          respect-pom-xml: false
 
-      # Configure app settings if needed
+      # Configure app settings separately to avoid conflicts
       - name: Configure App Settings
         run: |
           echo "Waiting for deployment to settle..."
           sleep 30
           echo "Configuring app settings..."
           az webapp config set --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --startup-file "gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app" \
             --python-version "3.9"
+            
+          # Set startup command
+          az webapp config appsettings set --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --settings "STARTUP_COMMAND=gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app"
           
           # Restart the app to apply settings
           echo "Restarting app to apply settings..."
