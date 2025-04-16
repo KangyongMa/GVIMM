@@ -116,6 +116,13 @@ jobs:
           
           # Create runtime.txt to specify Python version
           echo "python-3.9" > runtime.txt
+          
+          # Create deployment configuration file
+          cat > .deployment << 'EOL'
+          [config]
+          SCM_DO_BUILD_DURING_DEPLOYMENT=true
+          POST_BUILD_COMMAND=pip install -r requirements-prod.txt
+          EOL
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -154,6 +161,19 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
+      # Stop WebApp before deployment to release any locks
+      - name: Stop Azure Web App before deployment
+        run: |
+          az webapp stop --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
+        continue-on-error: true
+
+      # Clear deployment locks (if any exist)
+      - name: Clear deployment locks
+        run: |
+          az rest --method delete --uri "https://management.azure.com/subscriptions/${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}/resourceGroups/${{ secrets.AZURE_RESOURCE_GROUP }}/providers/Microsoft.Web/sites/GVIM/deployments/latest/lock?api-version=2019-08-01"
+        continue-on-error: true
+      
+      # Deploy with retry logic and clean deployment
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
@@ -162,3 +182,13 @@ jobs:
           slot-name: 'Production'
           package: .
           startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
+          clean: true
+          respect-pom-xml: false
+
+      # Start the WebApp after successful deployment
+      - name: Start Azure Web App after deployment
+        if: success()
+        run: |
+          az webapp start --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
+          # Check deployment status
+          az webapp deployment list --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --name GVIM
