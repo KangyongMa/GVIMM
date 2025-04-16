@@ -29,7 +29,7 @@ jobs:
           python -m venv venv
           source venv/bin/activate
       
-      # Install system dependencies for RDKit and pycairo
+      # Install system dependencies for Cairo and other requirements
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -57,17 +57,17 @@ jobs:
           echo "web: gunicorn --worker-class eventlet -w 1 app:app" > Procfile
           
           # Create run.py for direct execution
-          cat > run.py << 'EOL'
+          cat > run.py << 'EOL_INNER'
           import os
           from app import app, socketio
           
           if __name__ == "__main__":
               port = int(os.environ.get("PORT", 8000))
               socketio.run(app, host='0.0.0.0', port=port)
-          EOL
+          EOL_INNER
           
           # Create web.config for Azure Windows hosting
-          cat > web.config << 'EOL'
+          cat > web.config << 'EOL_INNER'
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
             <system.webServer>
@@ -86,7 +86,7 @@ jobs:
               </httpPlatform>
             </system.webServer>
           </configuration>
-          EOL
+          EOL_INNER
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
