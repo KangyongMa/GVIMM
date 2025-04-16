@@ -116,13 +116,6 @@ jobs:
           
           # Create runtime.txt to specify Python version
           echo "python-3.9" > runtime.txt
-          
-          # Create deployment configuration file
-          cat > .deployment << 'EOL'
-          [config]
-          SCM_DO_BUILD_DURING_DEPLOYMENT=true
-          POST_BUILD_COMMAND=pip install -r requirements-prod.txt
-          EOL
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -161,47 +154,62 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Force delete the website's deployment locks using the Azure CLI
-      - name: Delete deployment locks
+      # Get resource group name using Azure CLI
+      - name: Get Web App resource group
+        id: get-rg
         run: |
-          az resource update --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --resource-type Microsoft.Web/sites --set properties.publicNetworkAccess="Enabled"
-          az webapp deployment list-publishing-profiles --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --xml > publish_profile.xml
+          # Find the resource group for the web app using Azure CLI
+          RESOURCE_GROUP=$(az webapp show --name GVIM --query resourceGroup --output tsv)
+          echo "Found resource group: $RESOURCE_GROUP"
+          echo "resource_group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      # Stop the app completely
-      - name: Ensure web app is stopped
+      # Delete and recreate the app deployment using publish profile
+      - name: Get publishing profile
+        id: get-publish-profile
         run: |
-          az webapp stop --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
-          # Wait a bit for the app to fully stop
-          sleep 15
+          # Get the publishing profile
+          az webapp deployment list-publishing-profiles --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }} --xml > publish_profile.xml
         continue-on-error: true
-      
-      # Try alternative deployment approach with Azure CLI deploy
-      - name: Try direct deployment with Azure CLI
-        id: cli-deploy
+
+      - name: Attempt to reset SCM site
         run: |
-          az webapp deployment source config-zip --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --name GVIM --src release.zip
+          # Try to reset the SCM site if possible
+          az webapp deployment source delete --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }}
         continue-on-error: true
-      
-      # If CLI deploy fails, try with the action
-      - name: 'Deploy to Azure Web App (Fallback)'
-        if: steps.cli-deploy.outcome != 'success'
+
+      # Deploy with publish profile
+      - name: 'Deploy to Azure Web App with publish profile'
+        id: deploy-with-publish-profile
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'GVIM'
+          package: .
+          publish-profile: ${{ steps.get-publish-profile.outputs.profile }}
+        continue-on-error: true
+
+      # If deploy with publish profile fails, try direct zip deploy
+      - name: 'Deploy to Azure Web App (zip deploy)'
+        if: steps.deploy-with-publish-profile.outcome != 'success'
+        id: deploy-with-zip
+        run: |
+          # Try direct zip deployment using Azure CLI
+          echo "Attempting direct ZIP deployment..."
+          az webapp deployment source config-zip --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }} --src release.zip
+        continue-on-error: true
+
+      # Last resort - try standard deploy but with no params that might cause issues
+      - name: 'Deploy to Azure Web App (fallback)'
+        if: steps.deploy-with-publish-profile.outcome != 'success' && steps.deploy-with-zip.outcome != 'success'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'GVIM'
-          slot-name: 'Production'
           package: .
-          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
-          clean: true  # Only valid parameter - respect-pom-xml removed
 
-      # Start the WebApp after successful deployment
-      - name: Start Azure Web App after deployment
+      # Try to start the app regardless of which deployment was used
+      - name: Start the web app
         run: |
-          az webapp start --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
-          
-          # Apply configurations that might help with deployment issues
-          az webapp config set --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --generic-configurations '{"autoSwapSlotName": null}'
-          
-          # Check deployment status
-          az webapp deployment list --name GVIM --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }}
+          # Make sure app gets started
+          az webapp start --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }}
+        continue-on-error: true
