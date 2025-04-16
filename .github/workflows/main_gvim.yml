@@ -127,6 +127,11 @@ jobs:
         with:
           name: python-app
 
+      - name: Unzip deployment package
+        run: |
+          mkdir -p deploy
+          unzip -q app.zip -d deploy
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -134,100 +139,68 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Find webapp details and set resource group
-      - name: Find resource group
-        id: findresourcegroup
+      # Using a static resource group name instead of trying to look it up
+      - name: Set Resource Group Name
         run: |
-          echo "Looking for resource group for webapp 'gvim'..."
-          
-          # Try to get all details with jq for better parsing
-          az extension add --name resource-graph
-          
-          # Get resource group using resource graph query
-          RESOURCE_GROUP=$(az graph query -q "Resources | where type =~ 'Microsoft.Web/sites' and name =~ 'gvim' | project resourceGroup" --query "data[0].resourceGroup" -o tsv)
-          
-          if [ -n "$RESOURCE_GROUP" ]; then
-            echo "Found resource group: $RESOURCE_GROUP"
-            echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
-          else
-            echo "Could not find resource group for 'gvim' webapp using resource graph."
-            
-            # Try listing all webapps as fallback
-            RESOURCE_GROUP=$(az webapp list --query "[?name=='gvim'].resourceGroup" -o tsv)
-            
-            if [ -n "$RESOURCE_GROUP" ]; then
-              echo "Found resource group from webapp list: $RESOURCE_GROUP"
-              echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
-            else
-              echo "Could not automatically determine resource group."
-              echo "Looking for webapp with name 'GVIM' (uppercase)..."
-              
-              RESOURCE_GROUP=$(az webapp list --query "[?name=='GVIM'].resourceGroup" -o tsv)
-              
-              if [ -n "$RESOURCE_GROUP" ]; then
-                echo "Found resource group for 'GVIM': $RESOURCE_GROUP"
-                echo "APP_NAME=GVIM" >> $GITHUB_ENV
-              else
-                echo "Using fallback resource group name"
-                RESOURCE_GROUP="gvim-resource-group"
-              fi
-              
-              echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
-            fi
-          fi
+          # Hardcode the resource group name
+          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
+          echo "APP_NAME=gvim" >> $GITHUB_ENV
+
+      # Stop the web app before deployment to prevent SCM container restart issues
+      - name: Stop Web App
+        run: |
+          az webapp stop --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" || echo "Warning: Could not stop web app"
+          # Add delay to ensure stop operation completes
+          echo "Waiting for 30 seconds to ensure web app is fully stopped..."
+          sleep 30
 
       # Configure app settings before deployment to control Oryx build
       - name: Configure pre-deployment settings
         run: |
-          APP_NAME=${APP_NAME:-gvim}
-          echo "Using app name: $APP_NAME"
-          
           echo "Configuring app settings before deployment..."
-          az webapp config appsettings set --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+          az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
             --settings \
               "SCM_DO_BUILD_DURING_DEPLOYMENT=true" \
               "PYTHON_VERSION=3.9" \
               "ENABLE_ORYX_BUILD=true" \
-              "DISABLE_COLLECTSTATIC=true" \
-              "POST_BUILD_COMMAND=" \
           || echo "Warning: Could not set app settings. Continuing anyway."
           
           # Wait before deployment to avoid conflicts
-          echo "Waiting 15 seconds before deployment..."
-          sleep 15
+          echo "Waiting 10 seconds before deployment..."
+          sleep 10
 
-      # Unzip deployment package
-      - name: Prepare files
+      # Using direct Azure CLI command for deployment to avoid publishing profile requirements
+      - name: Deploy to Azure with CLI
+        id: deploy-with-cli
         run: |
-          mkdir -p deploy
-          unzip -q app.zip -d deploy
-
-      # Deploy using zip deploy method with an explicit resource group
-      - name: Deploy to Azure Web App
-        id: deploy-to-webapp
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.APP_NAME || 'gvim' }}
-          slot-name: 'Production'
-          resource-group: ${{ env.RESOURCE_GROUP }}
-          package: deploy
-          clean: true
-          respect-pom-xml: false
+          echo "Deploying to Azure Web App using Azure CLI..."
+          az webapp deployment source config-zip \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --name "${{ env.APP_NAME }}" \
+            --src ./app.zip \
+            --timeout 180
+          
+          # Save the web app URL for output
+          WEBAPP_URL="https://${{ env.APP_NAME }}.azurewebsites.net"
+          echo "webapp-url=$WEBAPP_URL" >> $GITHUB_OUTPUT
+          echo "Web app deployed at: $WEBAPP_URL"
+      
+      # Wait after deployment before configuration
+      - name: Wait after deployment
+        run: |
+          echo "Waiting 30 seconds after deployment..."
+          sleep 30
 
       # Configure app settings after deployment
       - name: Configure post-deployment settings
         run: |
-          APP_NAME=${APP_NAME:-gvim}
-          echo "Waiting for deployment to settle..."
-          sleep 30
-          
           echo "Configuring final app settings..."
-          az webapp config set --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
             --python-version "3.9" \
             --startup-file "startup.sh" \
           || echo "Warning: Could not set config. Continuing anyway."
           
           # Restart the app to apply settings
           echo "Restarting app to apply settings..."
-          az webapp restart --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+          az webapp restart --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
           || echo "Warning: Could not restart webapp. Please check the deployment."
