@@ -113,18 +113,16 @@ jobs:
 
       - name: Zip artifact for deployment
         run: |
-          # 删除不必要的文件和目录
+          # Delete unnecessary files and directories
           rm -rf __pycache__ tests *.pyc .git* venv
-          # 只打包必要的文件
-          zip release.zip app.py azure_startup.py static/* templates/* requirements-prod.txt .deployment runtime.txt web.config
+          # Only package necessary files
+          zip -r release.zip . -x "venv/*" "__pycache__/*" "*.pyc" ".git/*" ".github/*"
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            release.zip
-            !venv/
+          path: release.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -145,12 +143,6 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      - name: Clean deployment directory
-        run: |
-          rm -rf .git .github __pycache__ .pytest_cache
-          find . -type d -name "__pycache__" -exec rm -rf {} +
-          find . -name "*.pyc" -delete
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -158,46 +150,52 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Add step to get resource group name
-      - name: Get Resource Group Name
-        id: getresourcegroup
+      # Store the resource group name as a GitHub Actions environment variable
+      - name: Set Resource Group Name
+        id: resourcegroup
         run: |
-          # Use the same app name as in the deploy step
-          RESOURCE_GROUP=$(az webapp show --name "gvim" --query "resourceGroup" -o tsv || echo "")
-          if [ -z "$RESOURCE_GROUP" ]; then
-            echo "Could not automatically determine resource group, using default value"
-            RESOURCE_GROUP="gvim-resource-group"
-          fi
-          echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
-          echo "Resource group name: $RESOURCE_GROUP"
+          # Hardcode the resource group name directly to avoid lookup issues
+          # Replace "gvim-resource-group" with your actual resource group name
+          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
+          echo "Using resource group: gvim-resource-group"
       
-      # Stop the web app before deployment to prevent SCM container restart issues
-      - name: Stop Web App
+      # Get the publishing profile using explicit resource group
+      - name: Get publishing profile
+        id: publishprofile
         run: |
-          az webapp stop --name "gvim" --resource-group "$RESOURCE_GROUP"
-          # Add delay to ensure stop operation completes
-          echo "Waiting for 30 seconds to ensure web app is fully stopped..."
+          PROFILE=$(az webapp deployment list-publishing-profiles --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" --xml)
+          echo "::add-mask::$PROFILE"
+          echo "AZURE_WEBAPP_PUBLISH_PROFILE=$PROFILE" >> $GITHUB_ENV
+          echo "Publishing profile retrieved successfully"
+
+      # Modified deployment step with publishing profile and improved settings
+      - name: Prep for deployment
+        run: |
+          echo "Preparing for deployment..."
+          echo "Waiting for 30 seconds to ensure no conflicting operations..."
           sleep 30
 
-      - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
+      - name: Deploy to Azure Web App
         id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
         with:
           app-name: 'gvim'
           slot-name: 'Production'
-          resource-group: ${{ env.RESOURCE_GROUP }}
+          publish-profile: ${{ env.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
           clean: true
           startup-command: 'gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app'
-          respect-pom-xml: false
-      
-      # Add delay after deployment before starting
-      - name: Delay after deployment
+
+      # Configure app settings if needed
+      - name: Configure App Settings
         run: |
-          echo "Waiting for 15 seconds to ensure deployment is complete..."
-          sleep 15
-      
-      # Start the web app after deployment
-      - name: Start Web App
-        run: |
-          az webapp start --name "gvim" --resource-group "$RESOURCE_GROUP"
+          echo "Waiting for deployment to settle..."
+          sleep 30
+          echo "Configuring app settings..."
+          az webapp config set --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --startup-file "gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app" \
+            --python-version "3.9"
+          
+          # Restart the app to apply settings
+          echo "Restarting app to apply settings..."
+          az webapp restart --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}"
