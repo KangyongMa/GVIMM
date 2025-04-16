@@ -40,11 +40,26 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           
+          # Create a production requirements file with only essential dependencies
+          cat > requirements-prod.txt << 'EOL'
+          Flask==3.0.3
+          flask-socketio==5.4.1
+          flask-cors==3.0.10
+          gunicorn==21.2.0
+          eventlet==0.33.3
+          python-dotenv==1.0.1
+          rdkit-pypi==2022.9.5
+          numpy==1.26.4
+          pillow==10.3.0
+          requests==2.32.2
+          py3Dmol==2.4.0
+          EOL
+          
           # Install pycairo first with system dependencies available
           pip install pycairo
           
-          # Then install the rest of the requirements
-          pip install -r requirements.txt
+          # Install only essential packages for production
+          pip install -r requirements-prod.txt
           
           # Install additional packages for production deployment
           pip install gunicorn eventlet
@@ -53,11 +68,19 @@ jobs:
       - name: Create deployment files
         run: |
           # Create startup script for Azure
-          echo "gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:8000 app:app" > startup.sh
+          echo "gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:\$PORT app:app" > startup.sh
           chmod +x startup.sh
           
           # Create Procfile for compatibility
           echo "web: gunicorn --worker-class eventlet -w 1 app:app" > Procfile
+          
+          # Create wsgi.py for gunicorn
+          cat > wsgi.py << 'EOL'
+          from app import app
+          
+          if __name__ == "__main__":
+              app.run()
+          EOL
           
           # Create run.py for direct execution with Socket.IO support
           cat > run.py << 'EOL'
@@ -69,7 +92,7 @@ jobs:
               socketio.run(app, host='0.0.0.0', port=port)
           EOL
           
-          # Create web.config for Azure Windows hosting
+          # Create web.config for Azure hosting
           cat > web.config << 'EOL'
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
@@ -90,6 +113,9 @@ jobs:
             </system.webServer>
           </configuration>
           EOL
+          
+          # Create runtime.txt to specify Python version
+          echo "python-3.9" > runtime.txt
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -134,4 +160,5 @@ jobs:
         with:
           app-name: 'GVIM'
           slot-name: 'Production'
-          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:8000 app:app'
+          package: .
+          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
