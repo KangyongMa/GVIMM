@@ -99,69 +99,47 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+          
+      - name: Unzip artifact for deployment
+        run: unzip app.zip
 
+      # Use the official Azure WebApp deploy action instead of CLI commands
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'gvim'
+          slot-name: 'Production'
+          publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
+          package: .
+          
+      # Wait after deployment before configuration
+      - name: Wait after deployment
+        run: |
+          echo "Waiting 30 seconds after deployment..."
+          sleep 30
+          
+      # Login to Azure after the deployment to configure additional settings
       - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
-
-      # Using a static resource group name instead of trying to look it up
+          
+      # Set the resource group and app name
       - name: Set Resource Group Name
         run: |
-          # Set the resource group and app name explicitly
           echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
           echo "APP_NAME=gvim" >> $GITHUB_ENV
-          echo "Using resource group: gvim-resource-group"
-          echo "Using app name: gvim"
 
-      # Assign necessary permissions to service principal (may require elevated permissions)
-      - name: Assign Contributor Role to Service Principal
-        run: |
-          # Try to assign contributor role if possible
-          az role assignment create \
-            --assignee ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }} \
-            --role "Contributor" \
-            --scope "/subscriptions/${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ env.APP_NAME }}" \
-            || echo "Could not assign role. Make sure to manually assign Contributor permissions in Azure Portal."
-
-      # Stop the web app before deployment
-      - name: Stop Web App
-        run: |
-          az webapp stop --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" || echo "Warning: Could not stop web app"
-          echo "Waiting for 20 seconds to ensure web app is fully stopped..."
-          sleep 20
-
-      # Configure SCM_DO_BUILD_DURING_DEPLOYMENT to control build process
+      # Configure app settings
       - name: Configure App Settings
         run: |
-          echo "Configuring app settings before deployment..."
+          echo "Configuring app settings after deployment..."
           az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=true" "PYTHON_VERSION=3.9" \
+            --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "PYTHON_VERSION=3.9" \
             || echo "Warning: Could not set app settings. Continuing."
-
-      # Using the recommended az webapp deploy command instead of the deprecated one
-      - name: Deploy to Azure with CLI
-        id: deploy-to-webapp
-        run: |
-          echo "Deploying to Azure Web App using az webapp deploy command..."
-          az webapp deploy \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --name "${{ env.APP_NAME }}" \
-            --src-path ./app.zip \
-            --type zip \
-            --timeout 180
-          
-          # Save the web app URL for output
-          WEBAPP_URL="https://${{ env.APP_NAME }}.azurewebsites.net"
-          echo "webapp-url=$WEBAPP_URL" >> $GITHUB_OUTPUT
-      
-      # Wait after deployment before configuration
-      - name: Wait after deployment
-        run: |
-          echo "Waiting 30 seconds after deployment..."
-          sleep 30
 
       # Final configuration 
       - name: Set startup command
