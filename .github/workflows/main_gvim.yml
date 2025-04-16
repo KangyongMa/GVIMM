@@ -29,10 +29,64 @@ jobs:
           python -m venv venv
           source venv/bin/activate
       
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-        
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+      # Install system dependencies for RDKit and pycairo
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config python3-dev libxrender1 libxext6 libfontconfig1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Make a copy of requirements.txt without pycairo for safer installation
+          grep -v pycairo requirements.txt > requirements-no-pycairo.txt || true
+          pip install -r requirements-no-pycairo.txt
+          # Install pycairo separately with system dependencies available
+          pip install pycairo
+          # Install gunicorn and eventlet for production serving
+          pip install gunicorn eventlet
+
+      # Create deployment configuration files
+      - name: Create deployment files
+        run: |
+          # Create startup script for Azure
+          echo "gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:8000 app:app" > startup.sh
+          chmod +x startup.sh
+          
+          # Create Procfile for compatibility
+          echo "web: gunicorn --worker-class eventlet -w 1 app:app" > Procfile
+          
+          # Create run.py for direct execution
+          cat > run.py << 'EOL'
+          import os
+          from app import app, socketio
+          
+          if __name__ == "__main__":
+              port = int(os.environ.get("PORT", 8000))
+              socketio.run(app, host='0.0.0.0', port=port)
+          EOL
+          
+          # Create web.config for Azure Windows hosting
+          cat > web.config << 'EOL'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <system.webServer>
+              <handlers>
+                <add name="PythonHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>
+              </handlers>
+              <httpPlatform processPath="%home%\python39\python.exe"
+                            arguments="%home%\site\wwwroot\run.py"
+                            stdoutLogEnabled="true"
+                            stdoutLogFile="%home%\LogFiles\stdout"
+                            startupTimeLimit="60">
+                <environmentVariables>
+                  <environmentVariable name="PORT" value="%HTTP_PLATFORM_PORT%" />
+                  <environmentVariable name="PYTHONPATH" value="%home%\site\wwwroot" />
+                </environmentVariables>
+              </httpPlatform>
+            </system.webServer>
+          </configuration>
+          EOL
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -64,7 +118,6 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -78,4 +131,4 @@ jobs:
         with:
           app-name: 'GVIM'
           slot-name: 'Production'
-          
+          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:8000 app:app'
