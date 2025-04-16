@@ -67,32 +67,22 @@ jobs:
       # Create necessary deployment files for Azure
       - name: Create deployment files
         run: |
-          # Create startup script for Azure
-          echo "gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:\$PORT app:app" > startup.sh
-          chmod +x startup.sh
-          
-          # Create Procfile for compatibility
-          echo "web: gunicorn --worker-class eventlet -w 1 app:app" > Procfile
-          
-          # Create wsgi.py for gunicorn
-          cat > wsgi.py << 'EOL'
-          from app import app
-          
-          if __name__ == "__main__":
-              app.run()
-          EOL
-          
-          # Create run.py for direct execution with Socket.IO support
-          cat > run.py << 'EOL'
+          # Create simplified startup file for Azure
+          cat > azure_startup.py << 'EOL'
           import os
+          import logging
           from app import app, socketio
           
-          if __name__ == "__main__":
-              port = int(os.environ.get("PORT", 8000))
-              socketio.run(app, host='0.0.0.0', port=port)
-          EOL
+          logging.basicConfig(level=logging.INFO)
+          logger = logging.getLogger(__name__)
           
-          # Create web.config for Azure hosting
+          if __name__ == "__main__": 
+              port = int(os.environ.get("PORT", 8000))
+              logger.info(f"Starting application on port {port}")
+              socketio.run(app, host='0.0.0.0', port=port, debug=False)
+          EOL
+
+          # Create simplified web.config
           cat > web.config << 'EOL'
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
@@ -101,10 +91,10 @@ jobs:
                 <add name="PythonHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>
               </handlers>
               <httpPlatform processPath="%home%\python39\python.exe"
-                            arguments="%home%\site\wwwroot\run.py"
+                            arguments="%home%\site\wwwroot\azure_startup.py"
                             stdoutLogEnabled="true"
                             stdoutLogFile="%home%\LogFiles\stdout"
-                            startupTimeLimit="60">
+                            startupTimeLimit="120">
                 <environmentVariables>
                   <environmentVariable name="PORT" value="%HTTP_PLATFORM_PORT%" />
                   <environmentVariable name="PYTHONPATH" value="%home%\site\wwwroot" />
@@ -114,11 +104,19 @@ jobs:
           </configuration>
           EOL
           
+          # Create .deployment file to specify deployment settings
+          echo "[config]" > .deployment
+          echo "command = gunicorn --worker-class eventlet -w 1 app:app" >> .deployment
+          
           # Create runtime.txt to specify Python version
           echo "python-3.9" > runtime.txt
 
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: |
+          # 删除不必要的文件和目录
+          rm -rf __pycache__ tests *.pyc .git* venv
+          # 只打包必要的文件
+          zip release.zip app.py azure_startup.py static/* templates/* requirements-prod.txt .deployment runtime.txt web.config
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
@@ -147,6 +145,12 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
+      - name: Clean deployment directory
+        run: |
+          rm -rf .git .github __pycache__ .pytest_cache
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -name "*.pyc" -delete
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -154,34 +158,46 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Get publish profile
-      - name: Get publish profile
-        id: publishprofile
+      # Add step to get resource group name
+      - name: Get Resource Group Name
+        id: getresourcegroup
         run: |
-          # Get publishing profile
-          profile=$(az webapp deployment list-publishing-profiles --name GVIM --query "[?publishMethod=='MSDeploy'].publishUrl" --output tsv)
-          echo "Publishing profile obtained"
-          echo "::add-mask::$profile"
-          echo "PUBLISH_PROFILE=$profile" >> $GITHUB_ENV
-        continue-on-error: true
+          # Use the same app name as in the deploy step
+          RESOURCE_GROUP=$(az webapp show --name "gvim" --query "resourceGroup" -o tsv || echo "")
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "Could not automatically determine resource group, using default value"
+            RESOURCE_GROUP="gvim-resource-group"
+          fi
+          echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+          echo "Resource group name: $RESOURCE_GROUP"
+      
+      # Stop the web app before deployment to prevent SCM container restart issues
+      - name: Stop Web App
+        run: |
+          az webapp stop --name "gvim" --resource-group "$RESOURCE_GROUP"
+          # Add delay to ensure stop operation completes
+          echo "Waiting for 30 seconds to ensure web app is fully stopped..."
+          sleep 30
 
-      # Try using a publish profile to deploy
-      - name: 'Deploy to Azure Web App using publish profile'
-        id: deploy-with-profile
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'GVIM'
-          publish-profile: ${{ env.PUBLISH_PROFILE }}
-          package: .
-          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
-        continue-on-error: true
-
-      # If that fails, use basic deployment without problematic parameters
-      - name: 'Deploy to Azure Web App (fallback)'
-        if: steps.deploy-with-profile.outcome != 'success'
+      - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: 'GVIM'
+          app-name: 'gvim'
+          slot-name: 'Production'
+          resource-group: ${{ env.RESOURCE_GROUP }}
           package: .
-          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
+          clean: true
+          startup-command: 'gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app'
+          respect-pom-xml: false
+      
+      # Add delay after deployment before starting
+      - name: Delay after deployment
+        run: |
+          echo "Waiting for 15 seconds to ensure deployment is complete..."
+          sleep 15
+      
+      # Start the web app after deployment
+      - name: Start Web App
+        run: |
+          az webapp start --name "gvim" --resource-group "$RESOURCE_GROUP"
