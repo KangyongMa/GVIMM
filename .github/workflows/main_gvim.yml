@@ -154,62 +154,34 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Get resource group name using Azure CLI
-      - name: Get Web App resource group
-        id: get-rg
+      # Get publish profile
+      - name: Get publish profile
+        id: publishprofile
         run: |
-          # Find the resource group for the web app using Azure CLI
-          RESOURCE_GROUP=$(az webapp show --name GVIM --query resourceGroup --output tsv)
-          echo "Found resource group: $RESOURCE_GROUP"
-          echo "resource_group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+          # Get publishing profile
+          profile=$(az webapp deployment list-publishing-profiles --name GVIM --query "[?publishMethod=='MSDeploy'].publishUrl" --output tsv)
+          echo "Publishing profile obtained"
+          echo "::add-mask::$profile"
+          echo "PUBLISH_PROFILE=$profile" >> $GITHUB_ENV
         continue-on-error: true
 
-      # Delete and recreate the app deployment using publish profile
-      - name: Get publishing profile
-        id: get-publish-profile
-        run: |
-          # Get the publishing profile
-          az webapp deployment list-publishing-profiles --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }} --xml > publish_profile.xml
-        continue-on-error: true
-
-      - name: Attempt to reset SCM site
-        run: |
-          # Try to reset the SCM site if possible
-          az webapp deployment source delete --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }}
-        continue-on-error: true
-
-      # Deploy with publish profile
-      - name: 'Deploy to Azure Web App with publish profile'
-        id: deploy-with-publish-profile
+      # Try using a publish profile to deploy
+      - name: 'Deploy to Azure Web App using publish profile'
+        id: deploy-with-profile
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'GVIM'
+          publish-profile: ${{ env.PUBLISH_PROFILE }}
           package: .
-          publish-profile: ${{ steps.get-publish-profile.outputs.profile }}
+          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
         continue-on-error: true
 
-      # If deploy with publish profile fails, try direct zip deploy
-      - name: 'Deploy to Azure Web App (zip deploy)'
-        if: steps.deploy-with-publish-profile.outcome != 'success'
-        id: deploy-with-zip
-        run: |
-          # Try direct zip deployment using Azure CLI
-          echo "Attempting direct ZIP deployment..."
-          az webapp deployment source config-zip --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }} --src release.zip
-        continue-on-error: true
-
-      # Last resort - try standard deploy but with no params that might cause issues
+      # If that fails, use basic deployment without problematic parameters
       - name: 'Deploy to Azure Web App (fallback)'
-        if: steps.deploy-with-publish-profile.outcome != 'success' && steps.deploy-with-zip.outcome != 'success'
+        if: steps.deploy-with-profile.outcome != 'success'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'GVIM'
           package: .
-
-      # Try to start the app regardless of which deployment was used
-      - name: Start the web app
-        run: |
-          # Make sure app gets started
-          az webapp start --name GVIM --resource-group ${{ steps.get-rg.outputs.resource_group }}
-        continue-on-error: true
+          startup-command: 'gunicorn --worker-class eventlet -w 1 --bind=0.0.0.0:$PORT app:app'
