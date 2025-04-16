@@ -116,6 +116,16 @@ jobs:
           echo "Using resource group: gvim-resource-group"
           echo "Using app name: gvim"
 
+      # Assign necessary permissions to service principal (may require elevated permissions)
+      - name: Assign Contributor Role to Service Principal
+        run: |
+          # Try to assign contributor role if possible
+          az role assignment create \
+            --assignee ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }} \
+            --role "Contributor" \
+            --scope "/subscriptions/${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Web/sites/${{ env.APP_NAME }}" \
+            || echo "Could not assign role. Make sure to manually assign Contributor permissions in Azure Portal."
+
       # Stop the web app before deployment
       - name: Stop Web App
         run: |
@@ -131,15 +141,16 @@ jobs:
             --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=true" "PYTHON_VERSION=3.9" \
             || echo "Warning: Could not set app settings. Continuing."
 
-      # Using direct Azure CLI command for deployment
+      # Using the recommended az webapp deploy command instead of the deprecated one
       - name: Deploy to Azure with CLI
-        id: deploy-with-cli
+        id: deploy-to-webapp
         run: |
-          echo "Deploying to Azure Web App using Azure CLI..."
-          az webapp deployment source config-zip \
+          echo "Deploying to Azure Web App using az webapp deploy command..."
+          az webapp deploy \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --name "${{ env.APP_NAME }}" \
-            --src ./app.zip \
+            --src-path ./app.zip \
+            --type zip \
             --timeout 180
           
           # Save the web app URL for output
