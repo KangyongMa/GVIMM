@@ -9,6 +9,8 @@ from PIL import Image
 import io
 import json
 import base64
+import traceback  # Add missing import for traceback
+import time  # Add missing import for time
 from chat_storage import ChatSessionStorage
 import os
 import logging
@@ -23,7 +25,8 @@ from simulate_ai import (
     tavily_search,
     process_search_results,
     is_valid_url,
-    MoleculeValidator
+    MoleculeValidator,
+    rag_search  # Add rag_search to imports
 )
 from dotenv import load_dotenv
 
