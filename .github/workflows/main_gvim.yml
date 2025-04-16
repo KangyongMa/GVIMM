@@ -40,8 +40,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           
-          # Create a production requirements file with only essential dependencies
-          cat > requirements-prod.txt << 'EOL'
+          # Create a simplified requirements file for Azure
+          cat > requirements.txt << 'EOL'
           Flask==3.0.3
           flask-socketio==5.4.1
           flask-cors==3.0.10
@@ -58,8 +58,8 @@ jobs:
           # Install pycairo first with system dependencies available
           pip install pycairo
           
-          # Install only essential packages for production
-          pip install -r requirements-prod.txt
+          # Install required packages
+          pip install -r requirements.txt
           
           # Install additional packages for production deployment
           pip install gunicorn eventlet
@@ -67,22 +67,15 @@ jobs:
       # Create necessary deployment files for Azure
       - name: Create deployment files
         run: |
-          # Create simplified startup file for Azure
-          cat > azure_startup.py << 'EOL'
-          import os
-          import logging
-          from app import app, socketio
-          
-          logging.basicConfig(level=logging.INFO)
-          logger = logging.getLogger(__name__)
-          
-          if __name__ == "__main__": 
-              port = int(os.environ.get("PORT", 8000))
-              logger.info(f"Starting application on port {port}")
-              socketio.run(app, host='0.0.0.0', port=port, debug=False)
+          # Create startup.sh for Azure
+          cat > startup.sh << 'EOL'
+          #!/bin/bash
+          cd /home/site/wwwroot
+          exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
           EOL
-
-          # Create simplified web.config
+          chmod +x startup.sh
+          
+          # Create web.config for Azure
           cat > web.config << 'EOL'
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
@@ -90,39 +83,33 @@ jobs:
               <handlers>
                 <add name="PythonHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>
               </handlers>
-              <httpPlatform processPath="%home%\python39\python.exe"
-                            arguments="%home%\site\wwwroot\azure_startup.py"
+              <httpPlatform processPath="%home%\site\wwwroot\startup.sh"
                             stdoutLogEnabled="true"
-                            stdoutLogFile="%home%\LogFiles\stdout"
-                            startupTimeLimit="120">
-                <environmentVariables>
-                  <environmentVariable name="PORT" value="%HTTP_PLATFORM_PORT%" />
-                  <environmentVariable name="PYTHONPATH" value="%home%\site\wwwroot" />
-                </environmentVariables>
+                            stdoutLogFile="%home%\LogFiles\stdout">
               </httpPlatform>
             </system.webServer>
           </configuration>
           EOL
           
-          # Create .deployment file to specify deployment settings
-          echo "[config]" > .deployment
-          echo "command = gunicorn --worker-class eventlet -w 1 app:app" >> .deployment
-          
-          # Create runtime.txt to specify Python version
-          echo "python-3.9" > runtime.txt
+          # Create .deployment file for Azure Kudu
+          cat > .deployment << 'EOL'
+          [config]
+          SCM_DO_BUILD_DURING_DEPLOYMENT=true
+          EOL
 
       - name: Zip artifact for deployment
         run: |
-          # Delete unnecessary files and directories
-          rm -rf __pycache__ tests *.pyc .git* venv
-          # Only package necessary files
-          zip -r release.zip . -x "venv/*" "__pycache__/*" "*.pyc" ".git/*" ".github/*"
+          # Create zip archive excluding unnecessary files
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -name "*.pyc" -delete
+          rm -rf venv .git .github .pytest_cache tests
+          zip -r app.zip .
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: release.zip
+          path: app.zip
 
   deploy:
     runs-on: ubuntu-latest
@@ -140,9 +127,6 @@ jobs:
         with:
           name: python-app
 
-      - name: Unzip artifact for deployment
-        run: unzip release.zip
-
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -150,62 +134,100 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Checking if webapp exists to determine resource group name
+      # Find webapp details and set resource group
       - name: Find resource group
         id: findresourcegroup
         run: |
-          echo "Looking for resource group containing 'gvim' webapp..."
-          RESOURCE_GROUP=$(az webapp list --query "[?name=='gvim'].resourceGroup" -o tsv)
+          echo "Looking for resource group for webapp 'gvim'..."
+          
+          # Try to get all details with jq for better parsing
+          az extension add --name resource-graph
+          
+          # Get resource group using resource graph query
+          RESOURCE_GROUP=$(az graph query -q "Resources | where type =~ 'Microsoft.Web/sites' and name =~ 'gvim' | project resourceGroup" --query "data[0].resourceGroup" -o tsv)
           
           if [ -n "$RESOURCE_GROUP" ]; then
             echo "Found resource group: $RESOURCE_GROUP"
             echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
           else
-            echo "Could not find resource group for 'gvim' webapp. Using fallback."
-            # Try alternative webapp name case or use default
-            RESOURCE_GROUP=$(az webapp list --query "[?name=='GVIM'].resourceGroup" -o tsv || echo "gvim-resourcegroup")
-            echo "Using fallback resource group: $RESOURCE_GROUP"
-            echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+            echo "Could not find resource group for 'gvim' webapp using resource graph."
+            
+            # Try listing all webapps as fallback
+            RESOURCE_GROUP=$(az webapp list --query "[?name=='gvim'].resourceGroup" -o tsv)
+            
+            if [ -n "$RESOURCE_GROUP" ]; then
+              echo "Found resource group from webapp list: $RESOURCE_GROUP"
+              echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+            else
+              echo "Could not automatically determine resource group."
+              echo "Looking for webapp with name 'GVIM' (uppercase)..."
+              
+              RESOURCE_GROUP=$(az webapp list --query "[?name=='GVIM'].resourceGroup" -o tsv)
+              
+              if [ -n "$RESOURCE_GROUP" ]; then
+                echo "Found resource group for 'GVIM': $RESOURCE_GROUP"
+                echo "APP_NAME=GVIM" >> $GITHUB_ENV
+              else
+                echo "Using fallback resource group name"
+                RESOURCE_GROUP="gvim-resource-group"
+              fi
+              
+              echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> $GITHUB_ENV
+            fi
           fi
 
-      # Create output directory to prepare for improved deployment
-      - name: Prepare for deployment
+      # Configure app settings before deployment to control Oryx build
+      - name: Configure pre-deployment settings
         run: |
-          echo "Preparing for deployment..."
-          echo "Resource group: ${{ env.RESOURCE_GROUP }}"
-          echo "Checking webapp details..."
-          az webapp show --name gvim --resource-group "${{ env.RESOURCE_GROUP }}" || echo "Could not retrieve webapp details"
+          APP_NAME=${APP_NAME:-gvim}
+          echo "Using app name: $APP_NAME"
+          
+          echo "Configuring app settings before deployment..."
+          az webapp config appsettings set --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --settings \
+              "SCM_DO_BUILD_DURING_DEPLOYMENT=true" \
+              "PYTHON_VERSION=3.9" \
+              "ENABLE_ORYX_BUILD=true" \
+              "DISABLE_COLLECTSTATIC=true" \
+              "POST_BUILD_COMMAND=" \
+          || echo "Warning: Could not set app settings. Continuing anyway."
           
           # Wait before deployment to avoid conflicts
           echo "Waiting 15 seconds before deployment..."
           sleep 15
+
+      # Unzip deployment package
+      - name: Prepare files
+        run: |
+          mkdir -p deploy
+          unzip -q app.zip -d deploy
 
       # Deploy using zip deploy method with an explicit resource group
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'gvim'
+          app-name: ${{ env.APP_NAME || 'gvim' }}
           slot-name: 'Production'
           resource-group: ${{ env.RESOURCE_GROUP }}
-          package: .
+          package: deploy
           clean: true
-          # Don't use startup-command here, we'll configure it separately
           respect-pom-xml: false
 
-      # Configure app settings separately to avoid conflicts
-      - name: Configure App Settings
+      # Configure app settings after deployment
+      - name: Configure post-deployment settings
         run: |
+          APP_NAME=${APP_NAME:-gvim}
           echo "Waiting for deployment to settle..."
           sleep 30
-          echo "Configuring app settings..."
-          az webapp config set --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --python-version "3.9"
-            
-          # Set startup command
-          az webapp config appsettings set --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings "STARTUP_COMMAND=gunicorn --worker-class eventlet -w 1 -t 120 --timeout 120 app:app"
+          
+          echo "Configuring final app settings..."
+          az webapp config set --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --python-version "3.9" \
+            --startup-file "startup.sh" \
+          || echo "Warning: Could not set config. Continuing anyway."
           
           # Restart the app to apply settings
           echo "Restarting app to apply settings..."
-          az webapp restart --name "gvim" --resource-group "${{ env.RESOURCE_GROUP }}"
+          az webapp restart --name "$APP_NAME" --resource-group "${{ env.RESOURCE_GROUP }}" \
+          || echo "Warning: Could not restart webapp. Please check the deployment."
