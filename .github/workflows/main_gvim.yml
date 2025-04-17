@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9.18'  # Specify exact version that exists
+          python-version: '3.9'
 
       - name: Create and start virtual environment
         run: |
@@ -35,13 +35,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config python3-dev libfontconfig1-dev libfreetype6-dev libpng-dev libtiff-dev libxcb1-dev libxrender-dev libxml2-dev
 
-      # Special handling for pycairo - install pre-built wheel or from apt
-      - name: Install pycairo
+      # Install Python dependencies with special handling for pycairo
+      - name: Install dependencies
         run: |
-          # Try to install pycairo from apt first
-          sudo apt-get install -y python3-cairo
+          python -m pip install --upgrade pip
           
-          # Create a simplified requirements file without pycairo
+          # Create a simplified requirements file for Azure
           cat > requirements.txt << 'EOL'
           Flask==3.0.3
           flask-socketio==5.4.1
@@ -54,52 +53,22 @@ jobs:
           pillow==10.3.0
           requests==2.32.2
           py3Dmol==2.4.0
-          # pycairo is handled separately
+          pycairo
           EOL
           
           # Install required packages
           pip install -r requirements.txt
-          
-          # Force install pycairo using binary packages if possible
-          pip install --no-build-isolation pycairo || echo "Could not install pycairo via pip, but system package was installed"
 
       # Create necessary deployment files for Azure
       - name: Create deployment files
         run: |
-          # Create startup.sh for Azure with explicit LF line endings
+          # Create startup.sh for Azure
           cat > startup.sh << 'EOL'
-#!/bin/bash
-cd /home/site/wwwroot
-
-# Install system dependencies for pycairo if needed
-if ! python -c "import cairo" 2>/dev/null; then
-  echo "Installing cairo dependencies..."
-  apt-get update && apt-get install -y libcairo2-dev python3-cairo
-fi
-
-exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
-EOL
+          #!/bin/bash
+          cd /home/site/wwwroot
+          exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
+          EOL
           chmod +x startup.sh
-          
-          # Create .deployment file to specify deployment method
-          cat > .deployment << 'EOL'
-[config]
-SCM_DO_BUILD_DURING_DEPLOYMENT=false
-EOL
-
-          # Create an app_start script that will be used by Azure to start the app
-          cat > .azure/app_start.sh << 'EOL'
-#!/bin/bash
-cd /home/site/wwwroot
-
-# Ensure system packages for cairo are installed
-apt-get update && apt-get install -y libcairo2-dev python3-cairo
-
-# Start the app
-gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
-EOL
-          mkdir -p .azure
-          chmod +x .azure/app_start.sh
 
       - name: Zip artifact for deployment
         run: |
@@ -134,30 +103,7 @@ EOL
       - name: Unzip artifact for deployment
         run: unzip app.zip
 
-      # Login to Azure before deployment to ensure proper configuration
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
-          
-      # Set the resource group and app name
-      - name: Set Resource Group Name
-        run: |
-          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
-          echo "APP_NAME=gvim" >> $GITHUB_ENV
-
-      # Configure Python version and runtime stack before deployment
-      - name: Configure Python Runtime
-        run: |
-          echo "Configuring Python runtime before deployment..."
-          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --linux-fx-version "PYTHON|3.9" \
-            --python-version "3.9" \
-            || echo "Warning: Could not set Python runtime. Continuing."
-
-      # Use the official Azure WebApp deploy action
+      # Use the official Azure WebApp deploy action instead of CLI commands
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
@@ -173,16 +119,26 @@ EOL
           echo "Waiting 30 seconds after deployment..."
           sleep 30
           
+      # Login to Azure after the deployment to configure additional settings
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
+          
+      # Set the resource group and app name
+      - name: Set Resource Group Name
+        run: |
+          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
+          echo "APP_NAME=gvim" >> $GITHUB_ENV
+
       # Configure app settings
       - name: Configure App Settings
         run: |
           echo "Configuring app settings after deployment..."
           az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings \
-              "SCM_DO_BUILD_DURING_DEPLOYMENT=false" \
-              "PYTHON_VERSION=3.9" \
-              "WEBSITE_RUN_FROM_PACKAGE=0" \
-              "ENABLE_ORYX_BUILD=false" \
+            --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "PYTHON_VERSION=3.9" \
             || echo "Warning: Could not set app settings. Continuing."
 
       # Final configuration 
@@ -191,16 +147,9 @@ EOL
           echo "Setting startup command..."
           az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
             --startup-file "startup.sh" \
+            --python-version "3.9" \
             || echo "Warning: Could not set startup command. Continuing."
           
           echo "Restarting app to apply settings..."
           az webapp restart --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
             || echo "Warning: Could not restart webapp. Please check the deployment."
-          
-      # Create SSH extension for troubleshooting if needed
-      - name: Enable SSH for troubleshooting
-        run: |
-          echo "Enabling SSH for troubleshooting..."
-          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --remote-debugging-enabled true \
-            || echo "Warning: Could not enable remote debugging. Continuing."
