@@ -62,26 +62,34 @@ jobs:
       # Create necessary deployment files for Azure
       - name: Create deployment files
         run: |
-          # Create startup.sh for Azure - **需要修改**
-          # 确保它能在 Azure 环境中找到并使用 venv 中的 gunicorn
+          # Create startup.sh for Azure
           cat > startup.sh << 'EOL'
           #!/bin/bash
+          
           # Azure Web App 的代码根目录
           cd /home/site/wwwroot 
+          
           # 激活部署包中的虚拟环境
           source venv/bin/activate 
+          
           # 使用 venv 中的 gunicorn 运行应用
           exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
           EOL
           chmod +x startup.sh
+
+          # Create .deployment file to specify startup file
+          cat > .deployment << 'EOL'
+          [config]
+          SCM_DO_BUILD_DURING_DEPLOYMENT=false
+          PYTHON_VERSION=3.9
+          STARTUP_FILE=startup.sh
+          EOL
 
       - name: Zip artifact for deployment
         run: |
           # 清理不必要的文件
           find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete
-          # **关键修改**: 不要删除 venv 目录!
-          # rm -rf venv .git .github .pytest_cache tests
           rm -rf .git .github .pytest_cache tests # 只删除开发/测试相关文件
 
           # 打包当前目录所有内容（包括 venv）
@@ -101,7 +109,7 @@ jobs:
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
       id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout (虽然没直接用，但保留无害)
+      contents: read #This is required for actions/checkout
 
     steps:
       - name: Download artifact from build job
@@ -112,7 +120,6 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip app.zip # 现在解压出来的文件包含 venv 目录
 
-      # Login to Azure before deployment
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -120,7 +127,6 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
 
-      # Use the official Azure WebApp deploy action
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
@@ -129,36 +135,3 @@ jobs:
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
           package: . # 部署解压后的内容（现在包含 venv）
-          
-      # Wait after deployment before configuration (Optional)
-      - name: Wait after deployment
-        run: |
-          echo "Waiting 30 seconds after deployment..."
-          sleep 30
-          
-      # Set the resource group and app name
-      - name: Set Resource Group Name
-        run: |
-          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
-          echo "APP_NAME=gvim" >> $GITHUB_ENV
-
-      # Configure app settings - **保持 SCM_DO_BUILD_DURING_DEPLOYMENT=false**
-      - name: Configure App Settings
-        run: |
-          echo "Configuring app settings after deployment..."
-          az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "PYTHON_VERSION=3.9" \
-            || echo "Warning: Could not set app settings. Continuing."
-
-      # Final configuration - **设置使用修改后的 startup.sh**
-      - name: Set startup command
-        run: |
-          echo "Setting startup command..."
-          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --startup-file "startup.sh" \
-            --python-version "3.9" \
-            || echo "Warning: Could not set startup command. Continuing."
-          
-          echo "Restarting app to apply settings..."
-          az webapp restart --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            || echo "Warning: Could not restart webapp. Please check the deployment."
