@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.9.18'  # Specify exact version that exists
 
       - name: Create and start virtual environment
         run: |
@@ -62,13 +62,19 @@ jobs:
       # Create necessary deployment files for Azure
       - name: Create deployment files
         run: |
-          # Create startup.sh for Azure
+          # Create startup.sh for Azure with explicit LF line endings
           cat > startup.sh << 'EOL'
-          #!/bin/bash
-          cd /home/site/wwwroot
-          exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
-          EOL
+#!/bin/bash
+cd /home/site/wwwroot
+exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
+EOL
           chmod +x startup.sh
+          
+          # Create .deployment file to specify deployment method
+          cat > .deployment << 'EOL'
+[config]
+SCM_DO_BUILD_DURING_DEPLOYMENT=false
+EOL
 
       - name: Zip artifact for deployment
         run: |
@@ -103,7 +109,30 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip app.zip
 
-      # Use the official Azure WebApp deploy action instead of CLI commands
+      # Login to Azure before deployment to ensure proper configuration
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
+          
+      # Set the resource group and app name
+      - name: Set Resource Group Name
+        run: |
+          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
+          echo "APP_NAME=gvim" >> $GITHUB_ENV
+
+      # Configure Python version and runtime stack before deployment
+      - name: Configure Python Runtime
+        run: |
+          echo "Configuring Python runtime before deployment..."
+          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --linux-fx-version "PYTHON|3.9" \
+            --python-version "3.9" \
+            || echo "Warning: Could not set Python runtime. Continuing."
+
+      # Use the official Azure WebApp deploy action
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
@@ -119,26 +148,16 @@ jobs:
           echo "Waiting 30 seconds after deployment..."
           sleep 30
           
-      # Login to Azure after the deployment to configure additional settings
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
-          
-      # Set the resource group and app name
-      - name: Set Resource Group Name
-        run: |
-          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
-          echo "APP_NAME=gvim" >> $GITHUB_ENV
-
       # Configure app settings
       - name: Configure App Settings
         run: |
           echo "Configuring app settings after deployment..."
           az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings "SCM_DO_BUILD_DURING_DEPLOYMENT=false" "PYTHON_VERSION=3.9" \
+            --settings \
+              "SCM_DO_BUILD_DURING_DEPLOYMENT=false" \
+              "PYTHON_VERSION=3.9" \
+              "WEBSITE_RUN_FROM_PACKAGE=0" \
+              "ENABLE_ORYX_BUILD=false" \
             || echo "Warning: Could not set app settings. Continuing."
 
       # Final configuration 
@@ -147,7 +166,6 @@ jobs:
           echo "Setting startup command..."
           az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
             --startup-file "startup.sh" \
-            --python-version "3.9" \
             || echo "Warning: Could not set startup command. Continuing."
           
           echo "Restarting app to apply settings..."
