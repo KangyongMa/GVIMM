@@ -85,47 +85,32 @@ class ChatSessionStorage:
         """Add feedback to a specific message in a chat session."""
         try:
             if session_id not in self.chat_sessions:
-                print(f"Session {session_id} not found")
                 return False
             
-            if message_index == -1:  # Add feedback to the latest entry
-                if not self.chat_sessions[session_id]:
-                    print(f"No entries in session {session_id}")
-                    return False
-                
-                entry = self.chat_sessions[session_id][-1]
-                
-                if "feedback" not in entry:
-                    entry["feedback"] = {}
-                
-                # Update the feedback data with the new feedback
-                entry["feedback"].update(feedback_data)
-                
-                # Add timestamp to the feedback
-                entry["feedback"]["timestamp"] = datetime.now().isoformat()
-                
-                return self._save_session(session_id)
+            session = self.chat_sessions[session_id]
             
-            elif 0 <= message_index < len(self.chat_sessions[session_id]):
-                entry = self.chat_sessions[session_id][message_index]
+            # If message_index is out of range, append feedback to the last message
+            if message_index < 0 or message_index >= len(session):
+                message_index = len(session) - 1
+            
+            # If the message exists, add or update the feedback field
+            if 0 <= message_index < len(session):
+                if "feedback" not in session[message_index]:
+                    session[message_index]["feedback"] = {}
                 
-                if "feedback" not in entry:
-                    entry["feedback"] = {}
+                # Add or update the feedback data
+                session[message_index]["feedback"].update(feedback_data)
                 
-                # Update the feedback data with the new feedback
-                entry["feedback"].update(feedback_data)
-                
-                # Add timestamp to the feedback
-                entry["feedback"]["timestamp"] = datetime.now().isoformat()
+                # Add timestamp if not provided
+                if "timestamp" not in session[message_index]["feedback"]:
+                    session[message_index]["feedback"]["timestamp"] = datetime.now().isoformat()
                 
                 return self._save_session(session_id)
-            else:
-                print(f"Message index {message_index} is out of range for session {session_id}")
-                return False
+            return False
         except Exception as e:
             print(f"Error adding feedback: {e}")
             return False
-    
+
     def store_feedback(self, feedback_data: Dict[str, Any], session_id: str = "default") -> bool:
         """Store feedback for the most recent chat entry."""
         try:
