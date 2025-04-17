@@ -22,73 +22,28 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9.18'  # Specify exact version that exists
+          python-version: '3.9'
 
       - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
-
-      # Install system dependencies needed for pycairo and other packages
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config python3-dev libfontconfig1-dev libfreetype6-dev libpng-dev libtiff-dev libxcb1-dev libxrender-dev libxml2-dev
-
-      # Install Python dependencies with special handling for pycairo
+      
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          
-          # Create a simplified requirements file for Azure
-          cat > requirements.txt << 'EOL'
-          Flask==3.0.3
-          flask-socketio==5.4.1
-          flask-cors==3.0.10
-          gunicorn==21.2.0
-          eventlet==0.33.3
-          python-dotenv==1.0.1
-          rdkit-pypi==2022.9.5
-          numpy==1.26.4
-          pillow==10.3.0
-          requests==2.32.2
-          py3Dmol==2.4.0
-          pycairo
-          EOL
-          
-          # Install required packages
-          pip install -r requirements.txt
-
-      # Create necessary deployment files for Azure
-      - name: Create deployment files
-        run: |
-          # Create startup.sh for Azure with explicit LF line endings
-          cat > startup.sh << 'EOL'
-#!/bin/bash
-cd /home/site/wwwroot
-exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
-EOL
-          chmod +x startup.sh
-          
-          # Create .deployment file to specify deployment method
-          cat > .deployment << 'EOL'
-[config]
-SCM_DO_BUILD_DURING_DEPLOYMENT=false
-EOL
+        run: pip install -r requirements.txt
+        
+      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
       - name: Zip artifact for deployment
-        run: |
-          # Create zip archive excluding unnecessary files
-          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          find . -name "*.pyc" -delete
-          rm -rf venv .git .github .pytest_cache tests
-          zip -r app.zip .
+        run: zip release.zip ./* -r
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: app.zip
+          path: |
+            release.zip
+            !venv/
 
   deploy:
     runs-on: ubuntu-latest
@@ -105,69 +60,22 @@ EOL
         uses: actions/download-artifact@v4
         with:
           name: python-app
-          
-      - name: Unzip artifact for deployment
-        run: unzip app.zip
 
-      # Login to Azure before deployment to ensure proper configuration
+      - name: Unzip artifact for deployment
+        run: unzip release.zip
+
+      
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
-          
-      # Set the resource group and app name
-      - name: Set Resource Group Name
-        run: |
-          echo "RESOURCE_GROUP=gvim-resource-group" >> $GITHUB_ENV
-          echo "APP_NAME=gvim" >> $GITHUB_ENV
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_07C624A0D666414D9D114EE5E1CB1F38 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_1762292D46BB49039EB9E8A82E2A2867 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_815D0D180EDF4265B528C76E5A20816C }}
 
-      # Configure Python version and runtime stack before deployment
-      - name: Configure Python Runtime
-        run: |
-          echo "Configuring Python runtime before deployment..."
-          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --linux-fx-version "PYTHON|3.9" \
-            --python-version "3.9" \
-            || echo "Warning: Could not set Python runtime. Continuing."
-
-      # Use the official Azure WebApp deploy action
-      - name: Deploy to Azure Web App
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
-        uses: azure/webapps-deploy@v2
         with:
-          app-name: 'gvim'
+          app-name: 'GVIM'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
-          package: .
           
-      # Wait after deployment before configuration
-      - name: Wait after deployment
-        run: |
-          echo "Waiting 30 seconds after deployment..."
-          sleep 30
-          
-      # Configure app settings
-      - name: Configure App Settings
-        run: |
-          echo "Configuring app settings after deployment..."
-          az webapp config appsettings set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --settings \
-              "SCM_DO_BUILD_DURING_DEPLOYMENT=false" \
-              "PYTHON_VERSION=3.9" \
-              "WEBSITE_RUN_FROM_PACKAGE=0" \
-              "ENABLE_ORYX_BUILD=false" \
-            || echo "Warning: Could not set app settings. Continuing."
-
-      # Final configuration 
-      - name: Set startup command
-        run: |
-          echo "Setting startup command..."
-          az webapp config set --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --startup-file "startup.sh" \
-            || echo "Warning: Could not set startup command. Continuing."
-          
-          echo "Restarting app to apply settings..."
-          az webapp restart --name "${{ env.APP_NAME }}" --resource-group "${{ env.RESOURCE_GROUP }}" \
-            || echo "Warning: Could not restart webapp. Please check the deployment."
