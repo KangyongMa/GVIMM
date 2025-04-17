@@ -134,4 +134,7 @@ jobs:
           app-name: 'gvim'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
-          package: . # 部署解压后的内容（现在包含 venv）
+          package: .
+          respect-pom-xml: false
+          clean: true # Add clean flag to remove existing deployment
+          timeout: 600000 # Increase timeout to 10 minutes
