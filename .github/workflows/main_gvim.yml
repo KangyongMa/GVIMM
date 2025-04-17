@@ -26,7 +26,7 @@ jobs:
 
       - name: Create virtual environment
         run: |
-          python -m venv venv # 只创建，不在这一步激活
+          python -m venv venv # Create virtual environment
 
       # Install system dependencies needed for pycairo and other packages
       - name: Install system dependencies
@@ -37,10 +37,10 @@ jobs:
       # Install Python dependencies into the virtual environment
       - name: Install dependencies
         run: |
-          # 使用 venv 中的 pip 来安装
+          # Use pip from venv
           venv/bin/python -m pip install --upgrade pip
           
-          # 创建 requirements.txt (保持你原来的方式，或者最好是从代码库读取)
+          # Create requirements.txt
           cat > requirements.txt << 'EOL'
           Flask==3.0.3
           flask-socketio==5.4.1
@@ -56,7 +56,7 @@ jobs:
           pycairo
           EOL
           
-          # 使用 venv 中的 pip 安装依赖
+          # Install dependencies
           venv/bin/pip install -r requirements.txt
 
       # Create necessary deployment files for Azure
@@ -66,18 +66,18 @@ jobs:
           cat > startup.sh << 'EOL'
           #!/bin/bash
           
-          # Azure Web App 的代码根目录
+          # Azure Web App root directory
           cd /home/site/wwwroot 
           
-          # 激活部署包中的虚拟环境
+          # Activate virtual environment from the deployment package
           source venv/bin/activate 
           
-          # 使用 venv 中的 gunicorn 运行应用
+          # Run the app using gunicorn
           exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
           EOL
           chmod +x startup.sh
 
-          # Create .deployment file to specify startup file
+          # Create .deployment file
           cat > .deployment << 'EOL'
           [config]
           SCM_DO_BUILD_DURING_DEPLOYMENT=false
@@ -87,12 +87,12 @@ jobs:
 
       - name: Zip artifact for deployment
         run: |
-          # 清理不必要的文件
+          # Clean up unnecessary files
           find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
           find . -name "*.pyc" -delete
-          rm -rf .git .github .pytest_cache tests # 只删除开发/测试相关文件
+          rm -rf .git .github .pytest_cache tests # Remove development/testing files
 
-          # 打包当前目录所有内容（包括 venv）
+          # Package all contents (including venv)
           zip -r app.zip .
 
       - name: Upload artifact for deployment jobs
@@ -118,7 +118,7 @@ jobs:
           name: python-app
           
       - name: Unzip artifact for deployment
-        run: unzip app.zip # 现在解压出来的文件包含 venv 目录
+        run: unzip app.zip # Unzip the file, including venv directory
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -136,5 +136,5 @@ jobs:
           publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
           package: .
           respect-pom-xml: false
-          clean: true # Add clean flag to remove existing deployment
-          timeout: 600000 # Increase timeout to 10 minutes
+          clean: true # Clean existing deployment
+          timeout: 600000 # 10-minute timeout
