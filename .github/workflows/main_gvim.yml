@@ -15,23 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python version
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-
-      - name: Create virtual environment
-        run: |
-          python -m venv venv
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config python3-dev libfontconfig1-dev libfreetype6-dev libpng-dev libtiff-dev libxcb1-dev libxrender-dev libxml2-dev
 
-      - name: Install Python dependencies
+      - name: Generate requirements.txt
         run: |
-          venv/bin/python -m pip install --upgrade pip
           cat > requirements.txt << 'EOL'
           Flask==3.0.3
           flask-socketio==5.4.1
@@ -46,33 +41,24 @@ jobs:
           py3Dmol==2.4.0
           pycairo
           EOL
-          venv/bin/pip install -r requirements.txt
 
-      - name: Create deployment files
+      - name: Create startup script
         run: |
           cat > startup.sh << 'EOL'
           #!/bin/bash
           cd /home/site/wwwroot
-          source venv/bin/activate
           exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
           EOL
           chmod +x startup.sh
 
-          cat > .deployment << 'EOL'
-          [config]
-          SCM_DO_BUILD_DURING_DEPLOYMENT=false
-          PYTHON_VERSION=3.9
-          STARTUP_FILE=startup.sh
-          EOL
-
-      - name: Zip artifact for deployment
+      - name: Zip app for deployment
         run: |
-          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name "__pycache__" -exec rm -rf {} + || true
           find . -name "*.pyc" -delete
-          rm -rf .git .github .pytest_cache tests
+          rm -rf .git .github .pytest_cache tests venv
           zip -r app.zip .
 
-      - name: Upload artifact for deployment
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-app
@@ -89,15 +75,13 @@ jobs:
       contents: read
 
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: python-app
 
-      - name: Unzip artifact
-        run: unzip app.zip
+      - run: unzip app.zip
 
-      - name: Login to Azure
+      - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
@@ -112,5 +96,4 @@ jobs:
           slot-name: Production
           publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
           package: .
-          configuration-file: .deployment
           startup-command: bash startup.sh
