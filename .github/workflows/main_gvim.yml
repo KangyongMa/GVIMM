@@ -1,3 +1,7 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
+
 name: Build and deploy Python app to Azure Web App - GVIM
 
 on:
@@ -10,90 +14,58 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python version
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: Install system dependencies
+      - name: Create and start virtual environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config python3-dev libfontconfig1-dev libfreetype6-dev libpng-dev libtiff-dev libxcb1-dev libxrender-dev libxml2-dev
+          python -m venv venv
+          source venv/bin/activate
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
-      - name: Generate requirements.txt
-        run: |
-          cat > requirements.txt << 'EOL'
-          Flask==3.0.3
-          flask-socketio==5.4.1
-          flask-cors==3.0.10
-          gunicorn==21.2.0
-          eventlet==0.33.3
-          python-dotenv==1.0.1
-          rdkit-pypi==2022.9.5
-          numpy==1.26.4
-          pillow==10.3.0
-          requests==2.32.2
-          py3Dmol==2.4.0
-          pycairo
-          EOL
+      - name: Zip artifact for deployment
+        run: zip release.zip ./* -r
 
-      - name: Create startup script
-        run: |
-          cat > startup.sh << 'EOL'
-          #!/bin/bash
-          cd /home/site/wwwroot
-          exec gunicorn --worker-class eventlet -w 1 --timeout 120 app:app
-          EOL
-          chmod +x startup.sh
-
-      - name: Zip app for deployment
-        run: |
-          find . -type d -name "__pycache__" -exec rm -rf {} + || true
-          find . -name "*.pyc" -delete
-          rm -rf .git .github .pytest_cache tests venv
-          zip -r app.zip .
-
-      - name: Upload artifact
+      - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: app.zip
+          path: |
+            release.zip
+            !venv/
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
     environment:
-      name: Production
+      name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
-    permissions:
-      id-token: write
-      contents: read
-
+    
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
         with:
           name: python-app
 
-      - run: unzip app.zip
+      - name: Unzip artifact for deployment
+        run: unzip release.zip
 
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A8518B669BEA4EDEAA62F0C6FAB96A61 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_04E4A0CFF36944268ACB984E5445ECB8 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F7461E1A8E9C4B31B778D0BA8F803E15 }}
-
-      - name: Deploy to Azure Web App
+      
+      - name: 'Deploy to Azure Web App'
+        uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
-        uses: azure/webapps-deploy@v2
         with:
-          app-name: gvim
-          slot-name: Production
-          publish-profile: ${{ secrets.AZUREWEBAPP_PUBLISHPROFILE_GVIM }}
-          package: .
-          startup-command: bash startup.sh
+          app-name: 'GVIM'
+          slot-name: 'Production'
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_A5E0F602969B4E779A62ACEEADD1FEF9 }}
